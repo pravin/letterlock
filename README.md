@@ -2,25 +2,56 @@
 
 _Formerly `cwordle`._
 
-A free five-letter word-guessing game for the terminal. Guess the hidden word in
-six tries; after each guess the tiles show which letters are in the right spot,
-which are in the word but in the wrong spot, and which aren't in the word at all.
+**Crack the five-letter code in six guesses, right in your terminal.**
 
-Runs natively on Linux, macOS and Windows (Windows Terminal, PowerShell, cmd) with
-no system libraries required.
+letterlock is a free, open-source word-guessing game. After each guess the tiles show which
+letters are in the right spot, which are in the word but somewhere else, and which aren't in
+the word at all. One small binary, no account, no ads, works offline.
+
+![letterlock mid-game](img/playing.png)
+
+## Features
+
+- Runs natively on **Linux, macOS and Windows** (x86_64 and ARM64), with no libraries to install
+- **Hard mode**: every hint you uncover has to be used in later guesses
+- **Statistics**: win rate, streaks and a guess distribution, saved between sessions
+- **Accessible**: a no-colour mode that marks tiles with symbols instead of colours
+- Adapts to your terminal size and redraws when you resize the window
 
 ## Install
 
-From source with Rust (any platform):
+### Download a binary
+
+Grab the archive for your system from the
+[latest release](https://github.com/pravin/cwordle/releases/latest), extract it, and run
+`letterlock` (`letterlock.exe` on Windows).
+
+| System | File |
+| --- | --- |
+| Windows (most PCs) | `letterlock-<version>-x86_64-pc-windows-msvc.zip` |
+| Windows on ARM | `letterlock-<version>-aarch64-pc-windows-msvc.zip` |
+| macOS (Apple silicon) | `letterlock-<version>-aarch64-apple-darwin.tar.gz` |
+| macOS (Intel) | `letterlock-<version>-x86_64-apple-darwin.tar.gz` |
+| Linux (x86_64) | `letterlock-<version>-x86_64-unknown-linux-musl.tar.gz` |
+| Linux (ARM64, e.g. Raspberry Pi) | `letterlock-<version>-aarch64-unknown-linux-musl.tar.gz` |
+
+Each archive has a matching `.sha256` checksum file.
+
+> **First run on macOS:** the binaries aren't signed yet, so if you downloaded with a browser,
+> macOS may refuse to open the file. Run `xattr -d com.apple.quarantine letterlock` once.
+>
+> **First run on Windows:** SmartScreen may warn about an unrecognised app. Choose
+> **More info → Run anyway**.
+
+### Build from source
+
+With [Rust](https://rustup.rs) installed:
 
 ```sh
-cargo install letterlock
+cargo install --git https://github.com/pravin/cwordle
 ```
 
-Prebuilt binaries for Linux, macOS and Windows (x86_64 and ARM64) are attached to each
-[GitHub release](https://github.com/pravin/cwordle/releases).
-
-## Play
+## How to play
 
 ```sh
 letterlock              # new game
@@ -28,6 +59,14 @@ letterlock --hard-mode  # revealed hints must be used in later guesses
 letterlock --stats      # print your statistics
 letterlock --help       # all options
 ```
+
+Type a five-letter word and press **Enter**. Each tile then changes colour:
+
+- **Green**: right letter, right spot
+- **Yellow**: the letter is in the word, but in a different spot
+- **Dark grey**: the letter isn't in the word
+
+The on-screen keyboard keeps track of every letter you've tried.
 
 | Key | Action |
 | --- | --- |
@@ -38,11 +77,11 @@ letterlock --help       # all options
 
 After a game: `R` to play again, `S` for statistics, `Q` to quit.
 
-**Hard mode:** letters in the right spot must stay there, and letters found in the
-wrong spot must be used in every later guess.
+**Hard mode:** letters in the right spot must stay there, and letters found in the wrong spot
+must appear in every later guess.
 
-**No colour:** run with `--no-color` or set `NO_COLOR=1`. Tiles are then marked
-`[X]` (right spot), `(X)` (wrong spot) and lowercase `x` (not in the word).
+**No colour:** run with `--no-color` or set `NO_COLOR=1`. Tiles are then marked `[X]` (right
+spot), `(X)` (wrong spot) and lowercase `x` (not in the word).
 
 Statistics are saved to:
 
@@ -51,20 +90,17 @@ Statistics are saved to:
 - Windows: `%APPDATA%\letterlock\stats.json`
 
 ## Screenshots
-![Starting screen: letterlock](img/1.png)
-Starting screen
 
-![Image](img/2.png)
-Partway into a game
-
-![Image](img/3.png)
-Winning the game
-
-![Image](img/4.png)
-Entering a word that isn't in the word list
-
-![Image](img/5.png)
-Losing the game
+| | |
+| :---: | :---: |
+| ![Start screen](img/start.png) | ![Solved in three guesses](img/won.png) |
+| Start screen | Solved in three guesses |
+| ![Out of guesses](img/lost.png) | ![Statistics](img/stats.png) |
+| Out of guesses | Statistics |
+| ![Hard mode rejecting a guess](img/hard-mode.png) | ![No-colour mode](img/no-color.png) |
+| Hard mode rejecting a guess | No-colour mode |
+| ![Word not in the list](img/not-in-list.png) | |
+| Word not in the list | |
 
 ## Development
 
@@ -73,7 +109,17 @@ cargo test
 cargo run -- --word crane   # play with a fixed answer
 ```
 
-Releases are built by `.github/workflows/release.yml` when a `v*` tag is pushed.
+CI runs formatting, lint and tests on Linux, macOS and Windows for every push and pull request.
+
+### Releasing
+
+1. Bump `version` in `Cargo.toml` and commit.
+2. Tag and push: `git tag v0.2.0 && git push origin v0.2.0`.
+3. The [Release workflow](.github/workflows/release.yml) builds all six binaries and publishes a
+   GitHub release with checksums.
+
+To test the builds without publishing, run the Release workflow manually from the Actions tab.
+The binaries appear as downloadable artifacts on the run.
 
 ## License
 

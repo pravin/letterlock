@@ -1292,7 +1292,6 @@ facet
 facts
 faded
 fades
-fagot
 fails
 faint
 fairs
@@ -1678,7 +1677,6 @@ goody
 gooey
 goofs
 goofy
-gooks
 goons
 goose
 gored
@@ -2612,7 +2610,6 @@ niche
 nicks
 niece
 nifty
-nigga
 night
 nimbi
 nines
@@ -3764,7 +3761,6 @@ spurt
 squab
 squad
 squat
-squaw
 squid
 stabs
 stack

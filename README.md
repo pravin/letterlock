@@ -20,10 +20,29 @@ the word at all. One small binary, no account, no ads, works offline.
 
 ## Install
 
+**macOS / Linux** with [Homebrew](https://brew.sh):
+
+```sh
+brew install pravin/tap/letterlock
+```
+
+**Windows** with [Scoop](https://scoop.sh):
+
+```powershell
+scoop bucket add pravin https://github.com/pravin/scoop-bucket
+scoop install letterlock
+```
+
+**Any platform** with [Rust](https://rustup.rs):
+
+```sh
+cargo install letterlock
+```
+
 ### Download a binary
 
 Grab the archive for your system from the
-[latest release](https://github.com/pravin/cwordle/releases/latest), extract it, and run
+[latest release](https://github.com/pravin/letterlock/releases/latest), extract it, and run
 `letterlock` (`letterlock.exe` on Windows).
 
 | System | File |
@@ -42,14 +61,6 @@ Each archive has a matching `.sha256` checksum file.
 >
 > **First run on Windows:** SmartScreen may warn about an unrecognised app. Choose
 > **More info → Run anyway**.
-
-### Build from source
-
-With [Rust](https://rustup.rs) installed:
-
-```sh
-cargo install --git https://github.com/pravin/cwordle
-```
 
 ## How to play
 

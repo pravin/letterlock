@@ -22,12 +22,12 @@ The letterlock project has comprehensive test coverage including:
 ### Test Statistics
 
 ```
-Total Tests: 62
-- Unit Tests: 48
+Total Tests: 64
+- Unit Tests: 50
   - Config Module: 17 tests
   - GameState Module: 16 tests
   - Stats Module: 13 tests
-  - Words Module: 2 tests
+  - Words Module: 4 tests
 - Integration Tests: 14 tests
 ```
 
@@ -505,5 +505,5 @@ When adding new features:
 ---
 
 **Last Updated**: 2026-10-30
-**Test Count**: 62 tests (48 unit + 14 integration)
+**Test Count**: 64 tests (50 unit + 14 integration)
 **Coverage**: Core functionality, edge cases, and module interactions

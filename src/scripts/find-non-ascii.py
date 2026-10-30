@@ -1,4 +1,4 @@
-with open("words-list.txt") as fp:
+with open("src/word-list.txt") as fp:
     data = fp.read()
     for i in range(len(data)):
         c = data[i]

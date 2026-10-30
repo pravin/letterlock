@@ -1,7 +1,7 @@
 // Responsible for managing game state
 
-use super::words;
 use super::config::{Config, ALPHABET_SIZE, ASCII_LOWERCASE_A, WORD_LENGTH};
+use super::words;
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum GameStatus {
@@ -22,16 +22,51 @@ pub struct GameData {
     guess_count: usize,
     max_guesses: usize,
     words_guessed: Vec<String>,
+    scores: Vec<[KeyBoardHelperState; WORD_LENGTH]>,
     game_state: GameStatus,
     keyboard_helper: [KeyBoardHelperState; ALPHABET_SIZE],
     hard_mode: bool,
     revealed_letters: Vec<char>, // Letters that must be used in hard mode
 }
 
+/// Scores a guess against the answer, tile by tile.
+///
+/// Repeated letters are handled the standard way: exact matches are claimed
+/// first, then each remaining answer letter can mark at most one guess letter
+/// as AMBER. e.g. guessing "speed" for "abide" gives one AMBER 'e', not two.
+pub fn score_guess(guess: &str, answer: &str) -> [KeyBoardHelperState; WORD_LENGTH] {
+    let guess: Vec<char> = guess.chars().collect();
+    let mut remaining: Vec<Option<char>> = answer.chars().map(Some).collect();
+    let mut scores = [KeyBoardHelperState::GRAY; WORD_LENGTH];
+
+    // First, letters in the correct position
+    for i in 0..WORD_LENGTH {
+        if remaining[i] == Some(guess[i]) {
+            scores[i] = KeyBoardHelperState::GREEN;
+            remaining[i] = None;
+        }
+    }
+    // Next, letters present in the word but in the wrong position
+    for i in 0..WORD_LENGTH {
+        if scores[i] == KeyBoardHelperState::GREEN {
+            continue;
+        }
+        if let Some(idx) = remaining.iter().position(|&c| c == Some(guess[i])) {
+            scores[i] = KeyBoardHelperState::AMBER;
+            remaining[idx] = None;
+        }
+    }
+    scores
+}
+
+fn is_valid_shape(guess: &str) -> bool {
+    guess.len() == WORD_LENGTH && guess.chars().all(|c| c.is_ascii_lowercase())
+}
+
 impl GameData {
     pub fn new(config: &Config) -> GameData {
         let winning_word = if let Some(ref custom_word) = config.word {
-            custom_word.clone()
+            custom_word.to_ascii_lowercase()
         } else {
             words::choose_word().to_string()
         };
@@ -41,6 +76,7 @@ impl GameData {
             guess_count: 0,
             max_guesses: config.max_guesses,
             words_guessed: Vec::new(),
+            scores: Vec::new(),
             game_state: GameStatus::PLAYING,
             keyboard_helper: [KeyBoardHelperState::NONE; ALPHABET_SIZE],
             hard_mode: config.hard_mode,
@@ -48,69 +84,68 @@ impl GameData {
         }
     }
 
-    pub fn new_guess(&mut self, guess: &String) -> Result<GameStatus, String> {
-        if self.guess_count >= self.max_guesses {
-            return Err("Maximum guesses exceeded".to_string());
-        }
-
-        // Check hard mode constraints
-        if self.hard_mode && !self.revealed_letters.is_empty() {
-            for &letter in &self.revealed_letters {
-                if !guess.contains(letter) {
-                    return Err(format!("Hard mode: must use revealed letter '{}'", letter));
+    /// Checks hard mode rules: every GREEN letter must stay in its position
+    /// and every revealed letter must appear somewhere in the guess.
+    fn check_hard_mode(&self, guess: &str) -> Result<(), String> {
+        let guess_chars: Vec<char> = guess.chars().collect();
+        for (word, scores) in self.words_guessed.iter().zip(&self.scores) {
+            for (i, ch) in word.chars().enumerate() {
+                if scores[i] == KeyBoardHelperState::GREEN && guess_chars[i] != ch {
+                    return Err(format!(
+                        "Hard mode: must use revealed letter '{}' in position {}",
+                        ch.to_ascii_uppercase(),
+                        i + 1
+                    ));
                 }
             }
         }
+        for &letter in &self.revealed_letters {
+            if !guess.contains(letter) {
+                return Err(format!(
+                    "Hard mode: must use revealed letter '{}'",
+                    letter.to_ascii_uppercase()
+                ));
+            }
+        }
+        Ok(())
+    }
 
-        // Always increment guess count and add to guessed words
-        self.words_guessed.push(guess.clone());
+    pub fn new_guess(&mut self, guess: &str) -> Result<GameStatus, String> {
+        if self.game_state != GameStatus::PLAYING || self.guess_count >= self.max_guesses {
+            return Err("Maximum guesses exceeded".to_string());
+        }
+        if !is_valid_shape(guess) {
+            return Err(format!("Guess must be {} letters", WORD_LENGTH));
+        }
+
+        if self.hard_mode {
+            self.check_hard_mode(guess)?;
+        }
+
+        let scores = score_guess(guess, &self.winning_word);
+        self.words_guessed.push(guess.to_string());
+        self.scores.push(scores);
         self.guess_count += 1;
 
-        if guess.eq(&self.winning_word) {
+        if guess == self.winning_word {
             self.game_state = GameStatus::WON;
         } else if self.guess_count >= self.max_guesses {
             self.game_state = GameStatus::LOST;
         }
 
-        // Update keyboard helper and revealed letters for hard mode
-        let guess_chars: Vec<char> = guess.chars().collect();
-        let winning_chars: Vec<char> = self.winning_word.chars().collect();
-        for i in 0..WORD_LENGTH {
-            let ch = guess_chars[i];
-            // Only process lowercase ASCII letters to avoid panic
-            if !ch.is_ascii_lowercase() {
-                continue;
-            }
+        // Update keyboard helper (a key only ever upgrades: NONE < GRAY < AMBER < GREEN)
+        // and revealed letters for hard mode
+        for (ch, score) in guess.chars().zip(scores) {
             let char_index = ch as usize - ASCII_LOWERCASE_A;
-            if char_index >= ALPHABET_SIZE {
-                continue; // Skip if somehow out of range
+            if score as u8 > self.keyboard_helper[char_index] as u8 {
+                self.keyboard_helper[char_index] = score;
             }
-
-            if self.keyboard_helper[char_index] == KeyBoardHelperState::GREEN {
-                continue;
+            if self.hard_mode
+                && score != KeyBoardHelperState::GRAY
+                && !self.revealed_letters.contains(&ch)
+            {
+                self.revealed_letters.push(ch);
             }
-            if guess_chars[i] == winning_chars[i] {
-                self.keyboard_helper[char_index] = KeyBoardHelperState::GREEN;
-                // Add to revealed letters for hard mode
-                if self.hard_mode && !self.revealed_letters.contains(&ch) {
-                    self.revealed_letters.push(ch);
-                }
-                continue;
-            }
-
-            if self.keyboard_helper[char_index] == KeyBoardHelperState::AMBER {
-                continue;
-            }
-            if self.winning_word.contains(guess_chars[i]) {
-                self.keyboard_helper[char_index] = KeyBoardHelperState::AMBER;
-                // Add to revealed letters for hard mode
-                if self.hard_mode && !self.revealed_letters.contains(&ch) {
-                    self.revealed_letters.push(ch);
-                }
-                continue;
-            }
-
-            self.keyboard_helper[char_index] = KeyBoardHelperState::GRAY;
         }
 
         Ok(self.game_state)
@@ -138,6 +173,14 @@ impl GameData {
 
     pub fn guess_count(&self) -> usize {
         self.guess_count
+    }
+
+    /// Previous guesses paired with their per-tile scores, oldest first
+    pub fn guesses(&self) -> impl Iterator<Item = (&str, &[KeyBoardHelperState; WORD_LENGTH])> {
+        self.words_guessed
+            .iter()
+            .map(String::as_str)
+            .zip(&self.scores)
     }
 
     pub fn keyboard_helper(&self) -> [KeyBoardHelperState; ALPHABET_SIZE] {
@@ -178,7 +221,7 @@ mod tests {
         let config = create_test_config(false, 6, Some("apple".to_string()));
         let mut game = GameData::new(&config);
 
-        let result = game.new_guess(&"apple".to_string());
+        let result = game.new_guess("apple");
         assert!(result.is_ok());
         assert_eq!(game.status(), GameStatus::WON);
         assert_eq!(game.guess_count(), 1);
@@ -189,13 +232,13 @@ mod tests {
         let config = create_test_config(false, 3, Some("apple".to_string()));
         let mut game = GameData::new(&config);
 
-        game.new_guess(&"tests".to_string()).unwrap();
+        game.new_guess("tests").unwrap();
         assert_eq!(game.status(), GameStatus::PLAYING);
 
-        game.new_guess(&"bread".to_string()).unwrap();
+        game.new_guess("bread").unwrap();
         assert_eq!(game.status(), GameStatus::PLAYING);
 
-        game.new_guess(&"lemon".to_string()).unwrap();
+        game.new_guess("lemon").unwrap();
         assert_eq!(game.status(), GameStatus::LOST);
         assert_eq!(game.guess_count(), 3);
     }
@@ -205,7 +248,7 @@ mod tests {
         let config = create_test_config(false, 6, Some("apple".to_string()));
         let mut game = GameData::new(&config);
 
-        game.new_guess(&"ankle".to_string()).unwrap();
+        game.new_guess("ankle").unwrap();
 
         let keyboard = game.keyboard_helper();
         let a_index = 'a' as usize - ASCII_LOWERCASE_A;
@@ -217,7 +260,7 @@ mod tests {
         let config = create_test_config(false, 6, Some("apple".to_string()));
         let mut game = GameData::new(&config);
 
-        game.new_guess(&"plumb".to_string()).unwrap();
+        game.new_guess("plumb").unwrap();
 
         let keyboard = game.keyboard_helper();
         let p_index = 'p' as usize - ASCII_LOWERCASE_A;
@@ -229,7 +272,7 @@ mod tests {
         let config = create_test_config(false, 6, Some("apple".to_string()));
         let mut game = GameData::new(&config);
 
-        game.new_guess(&"tests".to_string()).unwrap();
+        game.new_guess("tests").unwrap();
 
         let keyboard = game.keyboard_helper();
         let t_index = 't' as usize - ASCII_LOWERCASE_A;
@@ -241,7 +284,7 @@ mod tests {
         let config = create_test_config(true, 6, Some("apple".to_string()));
         let mut game = GameData::new(&config);
 
-        game.new_guess(&"ankle".to_string()).unwrap();
+        game.new_guess("ankle").unwrap();
 
         assert!(game.revealed_letters().contains(&'a'));
         assert!(game.revealed_letters().contains(&'l'));
@@ -253,10 +296,10 @@ mod tests {
         let config = create_test_config(true, 6, Some("apple".to_string()));
         let mut game = GameData::new(&config);
 
-        game.new_guess(&"ankle".to_string()).unwrap();
+        game.new_guess("ankle").unwrap();
 
         // Try to guess a word without revealed letters
-        let result = game.new_guess(&"birds".to_string());
+        let result = game.new_guess("birds");
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("must use revealed letter"));
     }
@@ -266,10 +309,10 @@ mod tests {
         let config = create_test_config(true, 6, Some("apple".to_string()));
         let mut game = GameData::new(&config);
 
-        game.new_guess(&"ankle".to_string()).unwrap();
+        game.new_guess("ankle").unwrap();
 
-        // Guess contains revealed letters 'a', 'l', 'e'
-        let result = game.new_guess(&"abler".to_string());
+        // Keeps greens 'a', 'l', 'e' in place
+        let result = game.new_guess("addle");
         assert!(result.is_ok());
     }
 
@@ -278,15 +321,15 @@ mod tests {
         let config = create_test_config(false, 6, Some("table".to_string()));
         let mut game = GameData::new(&config);
 
-        game.new_guess(&"tests".to_string()).unwrap();
+        game.new_guess("tests").unwrap();
         assert_eq!(game.guess_count(), 1);
         assert_eq!(game.status(), GameStatus::PLAYING);
 
-        game.new_guess(&"train".to_string()).unwrap();
+        game.new_guess("train").unwrap();
         assert_eq!(game.guess_count(), 2);
         assert_eq!(game.status(), GameStatus::PLAYING);
 
-        game.new_guess(&"table".to_string()).unwrap();
+        game.new_guess("table").unwrap();
         assert_eq!(game.guess_count(), 3);
         assert_eq!(game.status(), GameStatus::WON);
     }
@@ -296,10 +339,10 @@ mod tests {
         let config = create_test_config(false, 2, Some("apple".to_string()));
         let mut game = GameData::new(&config);
 
-        game.new_guess(&"tests".to_string()).unwrap();
+        game.new_guess("tests").unwrap();
         assert_eq!(game.status(), GameStatus::PLAYING);
 
-        game.new_guess(&"bread".to_string()).unwrap();
+        game.new_guess("bread").unwrap();
         assert_eq!(game.status(), GameStatus::LOST);
         assert_eq!(game.guess_count(), 2);
     }
@@ -311,13 +354,62 @@ mod tests {
         let mut game = GameData::new(&config);
 
         // First guess: 'a' is in wrong position (should be AMBER)
-        game.new_guess(&"beans".to_string()).unwrap();
+        game.new_guess("beans").unwrap();
 
         // Second guess: 'a' is in correct position (should be GREEN)
-        game.new_guess(&"abler".to_string()).unwrap();
+        game.new_guess("abler").unwrap();
 
         let keyboard = game.keyboard_helper();
         let a_index = 'a' as usize - ASCII_LOWERCASE_A;
         assert_eq!(keyboard[a_index], KeyBoardHelperState::GREEN);
+    }
+
+    #[test]
+    fn test_hard_mode_green_must_stay_in_place() {
+        let config = create_test_config(true, 6, Some("apple".to_string()));
+        let mut game = GameData::new(&config);
+
+        game.new_guess("ankle").unwrap();
+
+        // Contains 'a', 'l', 'e' but moves the green 'a'
+        let result = game.new_guess("table");
+        assert!(result.unwrap_err().contains("position 1"));
+        assert_eq!(game.guess_count(), 1);
+    }
+
+    #[test]
+    fn test_score_guess_repeated_letters() {
+        use KeyBoardHelperState::*;
+        // Only one 'e' in the answer, so only one 'e' is scored
+        assert_eq!(
+            score_guess("speed", "abide"),
+            [GRAY, GRAY, AMBER, GRAY, AMBER]
+        );
+        // Exact match claims the letter before any AMBER
+        assert_eq!(
+            score_guess("lolly", "hello"),
+            [GRAY, AMBER, GREEN, GREEN, GRAY]
+        );
+        assert_eq!(score_guess("apple", "apple"), [GREEN; WORD_LENGTH]);
+    }
+
+    #[test]
+    fn test_invalid_guess_shape_rejected() {
+        let config = create_test_config(false, 6, Some("apple".to_string()));
+        let mut game = GameData::new(&config);
+
+        assert!(game.new_guess("app").is_err());
+        assert!(game.new_guess("APPLE").is_err());
+        assert_eq!(game.guess_count(), 0);
+    }
+
+    #[test]
+    fn test_no_guesses_after_game_over() {
+        let config = create_test_config(false, 6, Some("apple".to_string()));
+        let mut game = GameData::new(&config);
+
+        game.new_guess("apple").unwrap();
+        assert!(game.new_guess("apple").is_err());
+        assert_eq!(game.guess_count(), 1);
     }
 }

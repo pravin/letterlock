@@ -1,6 +1,6 @@
-# Testing Documentation for cwordle
+# Testing Documentation for letterlock
 
-This document describes the testing strategy, conventions, and how to run tests for the cwordle project.
+This document describes the testing strategy, conventions, and how to run tests for the letterlock project.
 
 ## Table of Contents
 
@@ -14,7 +14,7 @@ This document describes the testing strategy, conventions, and how to run tests 
 
 ## Overview
 
-The cwordle project has comprehensive test coverage including:
+The letterlock project has comprehensive test coverage including:
 - **Unit Tests**: Test individual modules and functions in isolation
 - **Integration Tests**: Test interaction between different modules
 - **Edge Case Tests**: Test boundary conditions and unusual scenarios
@@ -22,11 +22,11 @@ The cwordle project has comprehensive test coverage including:
 ### Test Statistics
 
 ```
-Total Tests: 56
-- Unit Tests: 42
+Total Tests: 62
+- Unit Tests: 48
   - Config Module: 17 tests
-  - GameState Module: 12 tests
-  - Stats Module: 11 tests
+  - GameState Module: 16 tests
+  - Stats Module: 13 tests
   - Words Module: 2 tests
 - Integration Tests: 14 tests
 ```
@@ -357,27 +357,13 @@ cargo fmt
 cargo build --release
 ```
 
-### GitHub Actions (Future)
+### GitHub Actions
 
-Recommended CI workflow:
+`.github/workflows/ci.yml` runs `cargo fmt --check`, `cargo clippy -- -D warnings`
+and `cargo test` on Linux, macOS and Windows for every push to `main` and every pull request.
 
-```yaml
-name: CI
-
-on: [push, pull_request]
-
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v2
-      - name: Run tests
-        run: cargo test --verbose
-      - name: Run clippy
-        run: cargo clippy -- -D warnings
-      - name: Check formatting
-        run: cargo fmt -- --check
-```
+The terminal UI (`src/gameui.rs`) is not covered by automated tests; game rules
+live in `src/gamestate.rs` so they can be tested without a terminal.
 
 ## Test Development Workflow
 
@@ -518,6 +504,6 @@ When adding new features:
 
 ---
 
-**Last Updated**: 2025-09-30
-**Test Count**: 56 tests (42 unit + 14 integration)
+**Last Updated**: 2026-10-30
+**Test Count**: 62 tests (48 unit + 14 integration)
 **Coverage**: Core functionality, edge cases, and module interactions

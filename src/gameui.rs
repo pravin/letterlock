@@ -1,321 +1,474 @@
-use pancurses::{
-    cbreak, endwin, has_colors, init_pair, initscr, noecho, start_color, use_default_colors, Input,
-    Window, COLOR_BLACK, COLOR_BLUE, COLOR_GREEN, COLOR_PAIR, COLOR_RED, COLOR_WHITE, COLOR_YELLOW,
-    OK,
+// Terminal UI: draws the game with crossterm and handles keyboard input.
+// The whole screen is redrawn from game state on every event, which keeps
+// rendering simple and makes terminal resizes work for free.
+
+use std::io::{self, Stdout, Write};
+
+use crossterm::{
+    cursor,
+    event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
+    execute, queue,
+    style::{Color, Print, ResetColor, SetBackgroundColor, SetForegroundColor},
+    terminal::{self, ClearType},
 };
 
+use super::config::{Config, CHAR_SPACING, MIN_TERMINAL_WIDTH, WORD_LENGTH};
 use super::gamestate::{GameData, GameStatus, KeyBoardHelperState};
-use super::config::{Config, MIN_TERMINAL_WIDTH, MIN_TERMINAL_HEIGHT, CHAR_SPACING, LINE_SPACING, ALPHABET_SIZE, ASCII_LOWERCASE_A, WORD_LENGTH};
-use super::stats::StatsManager;
+use super::stats::{GameStats, StatsManager};
+use super::words;
 
-pub fn init_game() -> Window {
-    let win: Window = initscr();
+const KEYBOARD_ROWS: [&str; 3] = ["qwertyuiop", "asdfghjkl", "zxcvbnm"];
+const TITLE: &str = env!("CARGO_PKG_NAME");
 
-    if win.get_max_y() < MIN_TERMINAL_HEIGHT || win.get_max_x() < MIN_TERMINAL_WIDTH {
-        panic!("You need at least a {}x{} terminal window to play this game.", MIN_TERMINAL_WIDTH, MIN_TERMINAL_HEIGHT);
-    }
-
-    if !has_colors() {
-        panic!("You need a terminal that can do color.");
-    }
-
-    start_color();
-    if use_default_colors() == OK {
-        init_pair(1, COLOR_WHITE, -1);
-    } else {
-        init_pair(1, COLOR_WHITE, COLOR_BLACK);
-    }
-    init_pair(2, COLOR_BLACK, COLOR_WHITE);  // Normal text
-    init_pair(3, COLOR_BLACK, COLOR_GREEN);  // Correct position (green)
-    init_pair(4, COLOR_BLACK, COLOR_YELLOW); // Wrong position (yellow)
-    init_pair(5, COLOR_WHITE, COLOR_BLUE);   // Input cursor
-    init_pair(6, COLOR_WHITE, COLOR_RED);    // Error messages
-    init_pair(7, COLOR_WHITE, COLOR_BLACK);  // Incorrect letters (dark)
-
-    cbreak();
-    noecho();
-
-    draw_header(&win);
-
-    // Load valid 5-letter words in memory
-
-    win
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TileStyle {
+    Blank,                       // empty box waiting for a letter
+    Typed,                       // letter typed in the current row
+    Key,                         // keyboard key not yet used
+    Scored(KeyBoardHelperState), // GRAY / AMBER / GREEN
 }
 
-fn draw_header(win: &Window) {
-    const TITLE: &str = "cwordle";
-    let title_len: i32 = TITLE.chars().count() as i32;
-    let color_array = [3, 2, 4, 4, 3, 2, 3].to_vec();
-    let mut x_pos = (win.get_max_x() - (title_len * CHAR_SPACING)) / 2;
-
-    for (i, c) in TITLE.chars().enumerate() {
-        win.attrset(COLOR_PAIR(color_array[i]));
-        win.mvaddstr(1, x_pos, format!(" {} ", c));
-        x_pos = x_pos + CHAR_SPACING;
-    }
-    win.attrset(COLOR_PAIR(1)); // reset colors
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MessageKind {
+    Info,
+    Error,
+    Success,
 }
 
-pub fn draw_keyboard(win: &Window, game_data: &GameData) {
-    let keyboard = "qwertyuiopasdfghjklzxcvbnm";
-    let mut x_pos: i32 = (win.get_max_x() - 36) / 2; // 9 letters per line
-    let mut y_pos: i32 = win.get_max_y() - 6;
+enum Action {
+    Letter(char),
+    Backspace,
+    Enter,
+    Quit,
+    Other, // any other key
+    Redraw,
+}
 
-    let keyboard_helper = game_data.keyboard_helper();
-    win.attrset(COLOR_PAIR(2)); // reset colors
-    for j in 0..ALPHABET_SIZE {
-        let the_char = keyboard.as_bytes()[j] as char;
-        // Safety check for valid lowercase ASCII
-        if !the_char.is_ascii_lowercase() {
-            continue;
+/// Screen positions for one frame, computed from the terminal size
+struct Layout {
+    cols: u16,
+    title_y: u16,
+    grid_y: u16,
+    gap: u16, // rows between grid/keyboard lines: 2 when there's room, else 1
+    keyboard_y: u16,
+    message_y: u16,
+    footer_y: u16,
+}
+
+impl Layout {
+    fn new(cols: u16, rows: u16, max_guesses: usize, legend: bool) -> Option<Layout> {
+        if cols < MIN_TERMINAL_WIDTH as u16 {
+            return None;
         }
-        let key_index = the_char as usize - ASCII_LOWERCASE_A;
-        // Get color of char
-        match keyboard_helper[key_index] {
-            KeyBoardHelperState::GRAY => win.attrset(COLOR_PAIR(7)), // Dark background for incorrect
-            KeyBoardHelperState::AMBER => win.attrset(COLOR_PAIR(4)), // Yellow background for wrong position
-            KeyBoardHelperState::GREEN => win.attrset(COLOR_PAIR(3)), // Green background for correct
-            KeyBoardHelperState::NONE => win.attrset(COLOR_PAIR(2)), // White background for unused
+        let height = |gap: u16| {
+            let grid = (max_guesses as u16 - 1) * gap + 1;
+            let keyboard = 2 * gap + 1;
+            // title, blank, grid, blank, keyboard, blank, message, footer, [legend]
+            2 + grid + 1 + keyboard + 1 + 2 + legend as u16
         };
-        win.mvaddstr(y_pos, x_pos, format!(" {} ", the_char));
-        x_pos += CHAR_SPACING;
-        if (j + 1) % 10 == 0 {
-            y_pos += LINE_SPACING;
-            x_pos = (win.get_max_x() - 36) / 2;
-            if j == 19 {
-                // center the last line
-                x_pos += 8;
+        let gap = [2, 1].into_iter().find(|&g| height(g) <= rows)?;
+        let title_y = (rows - height(gap)) / 2;
+        let grid_y = title_y + 2;
+        let keyboard_y = grid_y + (max_guesses as u16 - 1) * gap + 2;
+        let message_y = keyboard_y + 2 * gap + 2;
+        Some(Layout {
+            cols,
+            title_y,
+            grid_y,
+            gap,
+            keyboard_y,
+            message_y,
+            footer_y: message_y + 1,
+        })
+    }
+
+    fn min_size(max_guesses: usize, legend: bool) -> (u16, u16) {
+        let rows = 2 + max_guesses as u16 + 1 + 3 + 1 + 2 + legend as u16;
+        (MIN_TERMINAL_WIDTH as u16, rows)
+    }
+
+    fn centered_x(&self, width: usize) -> u16 {
+        (self.cols.saturating_sub(width as u16)) / 2
+    }
+}
+
+/// Restores the terminal to its normal state
+fn restore_terminal() {
+    let _ = execute!(
+        io::stdout(),
+        ResetColor,
+        cursor::Show,
+        terminal::LeaveAlternateScreen
+    );
+    let _ = terminal::disable_raw_mode();
+}
+
+pub struct Ui {
+    out: Stdout,
+    color: bool,
+}
+
+impl Ui {
+    /// Switches the terminal to full-screen raw mode. The terminal is restored
+    /// when the Ui is dropped, and also if the program panics.
+    pub fn new(color: bool) -> io::Result<Ui> {
+        let default_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            restore_terminal();
+            default_hook(info);
+        }));
+
+        terminal::enable_raw_mode()?;
+        let mut out = io::stdout();
+        execute!(out, terminal::EnterAlternateScreen, cursor::Hide)?;
+        Ok(Ui { out, color })
+    }
+
+    fn read_action(&self) -> io::Result<Action> {
+        loop {
+            let key = match event::read()? {
+                Event::Key(key) => key,
+                Event::Resize(_, _) => return Ok(Action::Redraw),
+                _ => continue,
+            };
+            // Windows reports key releases too; only act on presses
+            if key.kind == KeyEventKind::Release {
+                continue;
             }
-        }
-    }
-    win.attrset(COLOR_PAIR(1)); // reset colors
-}
-
-fn draw_footer(win: &Window, game_data: &GameData) {
-    let mut footer_text = format!(" Guess {}/{} ", game_data.guess_count() + 1, game_data.max_guesses());
-
-    if game_data.is_hard_mode() {
-        footer_text.push_str("| HARD MODE ");
-    }
-
-    if !game_data.revealed_letters().is_empty() {
-        footer_text.push_str(&format!("| Must use: {} ",
-            game_data.revealed_letters().iter().collect::<String>()));
-    }
-
-    footer_text.push_str("| Press Ctrl+C to quit");
-
-    win.mvaddstr(win.get_max_y() - 1, 2, &footer_text);
-}
-
-pub fn get_user_input(win: &Window, game_data: &GameData) -> String {
-    // Move cursor to the right position
-    let (x_pos, y_pos) = get_xy_pos(&win, &game_data);
-
-    let mut count: i32 = 0;
-    let mut input_array: [char; WORD_LENGTH] = [' '; WORD_LENGTH];
-
-    win.attrset(COLOR_PAIR(5));
-    win.mv(y_pos, x_pos);
-    loop {
-        match win.getch() {
-            Some(Input::Character(ch)) => {
-                if ch == '\n' && count == WORD_LENGTH as i32 {
-                    // Enter Key
-                    break;
+            let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+            return Ok(match key.code {
+                KeyCode::Char('c') | KeyCode::Char('d') if ctrl => Action::Quit,
+                KeyCode::Esc => Action::Quit,
+                KeyCode::Enter => Action::Enter,
+                KeyCode::Backspace | KeyCode::Delete => Action::Backspace,
+                KeyCode::Char(_) if ctrl => Action::Other,
+                KeyCode::Char(c) if c.is_ascii_alphabetic() => {
+                    Action::Letter(c.to_ascii_lowercase())
                 }
-                let keycode: u32 = ch.into();
-                if keycode == 127 && count > 0 {
-                    // Backspace Key
-                    count -= 1;
-                    input_array[count as usize] = ' '; // Clear the character from array
-                    // Keep the white background box but clear the letter
-                    win.attrset(COLOR_PAIR(2)); // White background with black text
-                    win.mvaddstr(y_pos, count * CHAR_SPACING + x_pos, "   ");
-                    win.mv(y_pos, count * CHAR_SPACING + x_pos);
-                    win.attrset(COLOR_PAIR(5)); // Reset to input cursor color
+                KeyCode::Char(_) => Action::Other,
+                _ => continue,
+            });
+        }
+    }
+
+    fn print_at(&mut self, x: u16, y: u16, text: &str, cols: u16) -> io::Result<()> {
+        let room = cols.saturating_sub(x) as usize;
+        let text: String = text.chars().take(room).collect();
+        queue!(self.out, cursor::MoveTo(x, y), Print(text))
+    }
+
+    fn draw_tile(&mut self, x: u16, y: u16, ch: char, style: TileStyle) -> io::Result<()> {
+        if !self.color {
+            // Without colors, brackets carry the meaning (see legend)
+            let text = match style {
+                TileStyle::Blank => " _ ".to_string(),
+                TileStyle::Typed | TileStyle::Key => format!(" {} ", ch.to_ascii_uppercase()),
+                TileStyle::Scored(KeyBoardHelperState::GREEN) => {
+                    format!("[{}]", ch.to_ascii_uppercase())
                 }
-                if !ch.is_alphabetic() || count >= WORD_LENGTH as i32 {
-                    continue;
+                TileStyle::Scored(KeyBoardHelperState::AMBER) => {
+                    format!("({})", ch.to_ascii_uppercase())
                 }
-                input_array[count as usize] = ch;
-                win.mvaddstr(y_pos, count * CHAR_SPACING + x_pos, format!(" {} ", ch));
-            }
-            Some(_input) => continue,
-            None => continue,
+                TileStyle::Scored(_) => format!(" {} ", ch.to_ascii_lowercase()),
+            };
+            return queue!(self.out, cursor::MoveTo(x, y), Print(text));
         }
-        count += 1;
-    }
-    win.attrset(COLOR_PAIR(1)); // Reset colors
 
-    let input_word: String = input_array.iter().collect();
-
-    input_word.to_ascii_lowercase()
-}
-
-pub fn clear_incorrect_word(win: &Window, game_data: &GameData, error_msg: &str) {
-    show_error(win, error_msg);
-    // Redraw empty boxes for current input
-    draw_empty_boxes(win, game_data);
-}
-
-fn get_xy_pos(win: &Window, game_data: &GameData) -> (i32, i32) {
-    let x_pos: i32 = (win.get_max_x() - (WORD_LENGTH as i32 * CHAR_SPACING)) / 2;
-    let y_pos: i32 = (win.get_max_y() / 2) - 8 + (game_data.guess_count() as i32 * LINE_SPACING);
-    (x_pos, y_pos)
-}
-
-pub fn color_input_word(win: &Window, game_data: &GameData, input: &str) {
-    // Use the previous guess count position since new_guess was already called
-    let x_pos: i32 = (win.get_max_x() - (WORD_LENGTH as i32 * CHAR_SPACING)) / 2;
-    let y_pos: i32 = (win.get_max_y() / 2) - 8 + ((game_data.guess_count() - 1) as i32 * LINE_SPACING);
-    let choice = game_data.winning_word();
-    let mut vchoice: Vec<char> = choice.chars().collect();
-    let mut colors: Vec<i32> = vec![0; WORD_LENGTH];
-
-    // First, check letters in the correct position
-    for (i, c) in input.chars().enumerate() {
-        if c == vchoice[i] {
-            colors[i] = 1; // 1 = Right letter, right place
-            vchoice[i] = '.';
-        }
-    }
-    // Next check for letters which are present in the word, but in the wrong position
-    for (i, c) in input.chars().enumerate() {
-        if colors[i] == 0 && vchoice.contains(&c) {
-            colors[i] = 2; // 2 = Right letter, wrong place
-            if let Some(idx) = vchoice.iter().position(|x| x == &c) {
-                vchoice[idx] = '.';
-            }
-        }
-    }
-
-    for (i, c) in input.chars().enumerate() {
-        if colors[i] == 1 {
-            win.attrset(COLOR_PAIR(3));
-            win.mvaddstr(y_pos, (i as i32) * CHAR_SPACING + x_pos, format!(" {} ", c));
-            win.attrset(COLOR_PAIR(1));
-        } else if colors[i] == 2 {
-            win.attrset(COLOR_PAIR(4));
-            win.mvaddstr(y_pos, (i as i32) * CHAR_SPACING + x_pos, format!(" {} ", c));
-            win.attrset(COLOR_PAIR(1));
-        } else {
-            win.attrset(COLOR_PAIR(7)); // Use dark background for incorrect letters
-            win.mvaddstr(y_pos, (i as i32) * CHAR_SPACING + x_pos, format!(" {} ", c));
-            win.attrset(COLOR_PAIR(1));
-        }
-    }
-}
-
-pub fn end_game(win: &Window, game_data: GameData, stats_manager: &mut StatsManager) -> bool {
-    assert!(game_data.status() != GameStatus::PLAYING);
-
-    let won = game_data.status() == GameStatus::WON;
-    let guess_count = if won { Some(game_data.guess_count()) } else { None };
-
-    // Record game statistics
-    if let Err(e) = stats_manager.record_game(won, guess_count) {
-        eprintln!("Failed to save statistics: {}", e);
-    }
-
-    if won {
-        win.attrset(COLOR_PAIR(3));
-        let message = if game_data.guess_count() == 1 {
-            "Incredible! You got it in 1 guess!"
-        } else {
-            &format!("Congratulations! You won in {} guesses!", game_data.guess_count())
+        let (fg, bg) = match style {
+            TileStyle::Blank | TileStyle::Key => (Color::Black, Color::Grey),
+            TileStyle::Typed => (Color::White, Color::DarkBlue),
+            TileStyle::Scored(KeyBoardHelperState::GREEN) => (Color::Black, Color::DarkGreen),
+            TileStyle::Scored(KeyBoardHelperState::AMBER) => (Color::Black, Color::DarkYellow),
+            TileStyle::Scored(KeyBoardHelperState::GRAY) => (Color::White, Color::DarkGrey),
+            TileStyle::Scored(KeyBoardHelperState::NONE) => (Color::Black, Color::Grey),
         };
-        win.mvaddstr(win.get_max_y() - 1, 2, message);
-    } else {
-        win.attrset(COLOR_PAIR(2));
-        win.mvaddstr(
-            win.get_max_y() - 1,
-            2,
-            &format!(
-                "The word was '{}'. Better luck next time!",
-                game_data.winning_word(),
-            ),
+        queue!(
+            self.out,
+            cursor::MoveTo(x, y),
+            SetForegroundColor(fg),
+            SetBackgroundColor(bg),
+            Print(format!(" {} ", ch.to_ascii_uppercase())),
+            ResetColor
+        )
+    }
+
+    fn draw_title(&mut self, layout: &Layout) -> io::Result<()> {
+        use KeyBoardHelperState::*;
+        let pattern = [GREEN, NONE, AMBER, AMBER, GREEN, NONE, GREEN];
+        let width = TITLE.len() * CHAR_SPACING as usize - 1;
+        if width > layout.cols as usize {
+            let x = layout.centered_x(TITLE.len());
+            return self.print_at(x, layout.title_y, TITLE, layout.cols);
+        }
+        let x = layout.centered_x(width);
+        for (i, ch) in TITLE.chars().enumerate() {
+            let style = if self.color {
+                TileStyle::Scored(pattern[i % pattern.len()])
+            } else {
+                TileStyle::Key
+            };
+            self.draw_tile(
+                x + i as u16 * CHAR_SPACING as u16,
+                layout.title_y,
+                ch,
+                style,
+            )?;
+        }
+        Ok(())
+    }
+
+    fn draw_grid(&mut self, layout: &Layout, game: &GameData, input: &str) -> io::Result<()> {
+        let width = WORD_LENGTH * CHAR_SPACING as usize - 1;
+        let x = layout.centered_x(width);
+        let mut guesses = game.guesses();
+        for row in 0..game.max_guesses() {
+            let y = layout.grid_y + row as u16 * layout.gap;
+            let tiles: Vec<(char, TileStyle)> = if let Some((word, scores)) = guesses.next() {
+                word.chars()
+                    .zip(scores.iter())
+                    .map(|(c, &s)| (c, TileStyle::Scored(s)))
+                    .collect()
+            } else if row == game.guess_count() && game.status() == GameStatus::PLAYING {
+                let mut typed: Vec<(char, TileStyle)> =
+                    input.chars().map(|c| (c, TileStyle::Typed)).collect();
+                typed.resize(WORD_LENGTH, (' ', TileStyle::Blank));
+                typed
+            } else {
+                vec![(' ', TileStyle::Blank); WORD_LENGTH]
+            };
+            for (i, (ch, style)) in tiles.into_iter().enumerate() {
+                self.draw_tile(x + i as u16 * CHAR_SPACING as u16, y, ch, style)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn draw_keyboard(&mut self, layout: &Layout, game: &GameData) -> io::Result<()> {
+        let helper = game.keyboard_helper();
+        for (r, keys) in KEYBOARD_ROWS.iter().enumerate() {
+            let y = layout.keyboard_y + r as u16 * layout.gap;
+            let x = layout.centered_x(keys.len() * CHAR_SPACING as usize - 1);
+            for (i, ch) in keys.chars().enumerate() {
+                let style = match helper[ch as usize - 'a' as usize] {
+                    KeyBoardHelperState::NONE => TileStyle::Key,
+                    state => TileStyle::Scored(state),
+                };
+                self.draw_tile(x + i as u16 * CHAR_SPACING as u16, y, ch, style)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn draw_message(
+        &mut self,
+        layout: &Layout,
+        message: &Option<(String, MessageKind)>,
+    ) -> io::Result<()> {
+        let Some((text, kind)) = message else {
+            return Ok(());
+        };
+        let text = format!(" {} ", text);
+        let x = layout.centered_x(text.len());
+        if self.color {
+            let (fg, bg) = match kind {
+                MessageKind::Info => (Color::Reset, Color::Reset),
+                MessageKind::Error => (Color::White, Color::DarkRed),
+                MessageKind::Success => (Color::Black, Color::DarkGreen),
+            };
+            queue!(self.out, SetForegroundColor(fg), SetBackgroundColor(bg))?;
+        }
+        self.print_at(x, layout.message_y, &text, layout.cols)?;
+        queue!(self.out, ResetColor)
+    }
+
+    fn draw_too_small(&mut self, max_guesses: usize) -> io::Result<()> {
+        let (cols, rows) = terminal::size()?;
+        let (min_cols, min_rows) = Layout::min_size(max_guesses, !self.color);
+        let text = format!(
+            "Terminal too small: {}x{} (need {}x{}). Resize, or press Esc to quit.",
+            cols, rows, min_cols, min_rows
         );
+        let text: String = text.chars().take(cols as usize).collect();
+        queue!(self.out, cursor::MoveTo(0, 0), Print(text))
     }
 
-    win.mvaddstr(win.get_max_y() - 2, 2, "Press 'r' to play again, 's' for stats, or any other key to quit");
-
-    let choice = win.getch();
-    win.attrset(COLOR_PAIR(1));
-
-    match choice {
-        Some(Input::Character('r')) | Some(Input::Character('R')) => {
-            true // Play again
+    fn draw_game(
+        &mut self,
+        game: &GameData,
+        input: &str,
+        message: &Option<(String, MessageKind)>,
+        footer: &str,
+    ) -> io::Result<()> {
+        queue!(self.out, ResetColor, terminal::Clear(ClearType::All))?;
+        let (cols, rows) = terminal::size()?;
+        match Layout::new(cols, rows, game.max_guesses(), !self.color) {
+            Some(layout) => {
+                self.draw_title(&layout)?;
+                self.draw_grid(&layout, game, input)?;
+                self.draw_keyboard(&layout, game)?;
+                self.draw_message(&layout, message)?;
+                let x = layout.centered_x(footer.len());
+                self.print_at(x, layout.footer_y, footer, layout.cols)?;
+                if !self.color {
+                    let legend = "[X] right spot   (X) wrong spot   x not in word";
+                    let x = layout.centered_x(legend.len());
+                    self.print_at(x, layout.footer_y + 1, legend, layout.cols)?;
+                }
+            }
+            None => self.draw_too_small(game.max_guesses())?,
         }
-        Some(Input::Character('s')) | Some(Input::Character('S')) => {
-            show_stats(win, stats_manager);
-            false // Quit after showing stats
-        }
-        _ => {
-            endwin();
-            false // Quit
+        self.out.flush()
+    }
+
+    fn show_stats(&mut self, stats: &GameStats, max_guesses: usize) -> io::Result<()> {
+        loop {
+            queue!(self.out, ResetColor, terminal::Clear(ClearType::All))?;
+            let (cols, rows) = terminal::size()?;
+            let mut lines = format_stats(stats, max_guesses);
+            lines.push(String::new());
+            lines.push("Press any key to go back".to_string());
+            if lines.len() >= rows as usize {
+                lines.retain(|l| !l.is_empty());
+            }
+            let width = lines.iter().map(|l| l.len()).max().unwrap_or(0);
+            let x = cols.saturating_sub(width as u16) / 2;
+            for (i, line) in lines.iter().enumerate() {
+                self.print_at(x, 1 + i as u16, line, cols)?;
+            }
+            self.out.flush()?;
+            if !matches!(self.read_action()?, Action::Redraw) {
+                return Ok(());
+            }
         }
     }
 }
 
-fn show_error(win: &Window, error_msg: &str) {
-    win.attrset(COLOR_PAIR(6));
-    win.mvaddstr(win.get_max_y() - 1, 2, error_msg);
-    win.getch();
-    win.attrset(COLOR_PAIR(1));
-    // Clear the error message
-    let spaces = " ".repeat(error_msg.len() + 10);
-    win.mvaddstr(win.get_max_y() - 1, 2, &spaces);
+impl Drop for Ui {
+    fn drop(&mut self) {
+        restore_terminal();
+    }
 }
 
-pub fn show_stats(win: &Window, stats_manager: &StatsManager) {
-    win.clear();
-    let stats = stats_manager.get_stats();
-
-    win.attrset(COLOR_PAIR(3));
-    win.mvaddstr(2, 2, "GAME STATISTICS");
-    win.attrset(COLOR_PAIR(1));
-
-    win.mvaddstr(4, 2, &format!("Games Played: {}", stats.games_played));
-    win.mvaddstr(5, 2, &format!("Win Rate: {:.1}%", stats.win_percentage()));
-    win.mvaddstr(6, 2, &format!("Current Streak: {}", stats.current_streak));
-    win.mvaddstr(7, 2, &format!("Max Streak: {}", stats.max_streak));
-    win.mvaddstr(8, 2, &format!("Average Guesses: {:.1}", stats.average_guesses()));
-
-    win.mvaddstr(10, 2, "Guess Distribution:");
-    for guess in 1..=6 {
-        let count = stats.guess_distribution.get(&(guess as u32)).unwrap_or(&0);
-        let percentage = if stats.games_won > 0 {
-            (*count as f32 / stats.games_won as f32) * 100.0
+/// Plain-text statistics, shared by the stats screen and `--stats`
+pub fn format_stats(stats: &GameStats, max_guesses: usize) -> Vec<String> {
+    let mut lines = vec![
+        "STATISTICS".to_string(),
+        String::new(),
+        format!("Games played:    {}", stats.games_played),
+        format!("Win rate:        {:.0}%", stats.win_percentage()),
+        format!("Current streak:  {}", stats.current_streak),
+        format!("Max streak:      {}", stats.max_streak),
+        format!("Average guesses: {:.1}", stats.average_guesses()),
+        String::new(),
+        "Guess distribution:".to_string(),
+    ];
+    let most_guesses = stats.guess_distribution.keys().copied().max().unwrap_or(0) as usize;
+    let most_wins = stats
+        .guess_distribution
+        .values()
+        .copied()
+        .max()
+        .unwrap_or(0);
+    for guess in 1..=max_guesses.max(most_guesses) {
+        let count = stats
+            .guess_distribution
+            .get(&(guess as u32))
+            .copied()
+            .unwrap_or(0);
+        let bar_len = if most_wins > 0 {
+            (count * 30).div_ceil(most_wins) as usize
         } else {
-            0.0
+            0
         };
-        win.mvaddstr(10 + guess, 4, &format!("{}: {} ({:.1}%)", guess, count, percentage));
+        lines.push(format!("{:>3} | {} {}", guess, "#".repeat(bar_len), count));
     }
-
-    win.mvaddstr(win.get_max_y() - 2, 2, "Press any key to continue...");
-    win.getch();
+    lines
 }
 
-pub fn update_footer(win: &Window, game_data: &GameData) {
-    // Clear the footer area
-    let spaces = " ".repeat(win.get_max_x() as usize - 4);
-    win.mvaddstr(win.get_max_y() - 1, 2, &spaces);
-    draw_footer(win, game_data);
-}
-
-pub fn draw_empty_boxes(win: &Window, game_data: &GameData) {
-    let (x_pos, y_pos) = get_xy_pos(&win, &game_data);
-
-    win.attrset(COLOR_PAIR(2)); // White background with black text
-    for i in 0..WORD_LENGTH {
-        win.mvaddstr(y_pos, (i as i32) * CHAR_SPACING + x_pos, "   ");
+fn playing_footer(game: &GameData) -> String {
+    let mut footer = format!("Guess {}/{}", game.guess_count() + 1, game.max_guesses());
+    if game.is_hard_mode() {
+        footer.push_str(" | HARD MODE");
+        if !game.revealed_letters().is_empty() {
+            let letters: String = game
+                .revealed_letters()
+                .iter()
+                .map(|c| c.to_ascii_uppercase())
+                .collect();
+            footer.push_str(&format!(" | Must use: {}", letters));
+        }
     }
-    win.attrset(COLOR_PAIR(1));
+    footer.push_str(" | Esc: quit");
+    footer
 }
 
-pub fn redraw_game_screen(win: &Window) {
-    // Redraw the header for a fresh game
-    draw_header(win);
-    win.refresh();
+/// Runs games until the player quits
+pub fn run(config: &Config, stats_manager: &mut StatsManager) -> io::Result<()> {
+    let mut ui = Ui::new(config.use_color())?;
+
+    loop {
+        let mut game = GameData::new(config);
+        let mut input = String::new();
+        let mut message = None;
+
+        // Play one game
+        while game.status() == GameStatus::PLAYING {
+            ui.draw_game(&game, &input, &message, &playing_footer(&game))?;
+            let action = ui.read_action()?;
+            if !matches!(action, Action::Redraw) {
+                message = None;
+            }
+            match action {
+                Action::Quit => return Ok(()),
+                Action::Letter(c) if input.len() < WORD_LENGTH => input.push(c),
+                Action::Backspace => {
+                    input.pop();
+                }
+                Action::Enter if input.len() < WORD_LENGTH => {
+                    message = Some(("Not enough letters".to_string(), MessageKind::Error));
+                }
+                Action::Enter if !words::word_isvalid(&input) => {
+                    message = Some(("Not in word list".to_string(), MessageKind::Error));
+                }
+                Action::Enter => match game.new_guess(&input) {
+                    Ok(_) => input.clear(),
+                    Err(e) => message = Some((e, MessageKind::Error)),
+                },
+                _ => {}
+            }
+        }
+
+        // Game over: record and show result
+        let won = game.status() == GameStatus::WON;
+        let result = if won {
+            let text = match game.guess_count() {
+                1 => "Incredible! You got it in 1 guess!".to_string(),
+                n => format!("You got it in {} guesses!", n),
+            };
+            (text, MessageKind::Success)
+        } else {
+            let word = game.winning_word().to_ascii_uppercase();
+            (
+                format!("The word was {}. Better luck next time!", word),
+                MessageKind::Info,
+            )
+        };
+        let saved = stats_manager.record_game(won, won.then(|| game.guess_count()));
+        let message = match saved {
+            Ok(()) => Some(result),
+            Err(e) => Some((format!("{} (stats not saved: {})", result.0, e), result.1)),
+        };
+
+        loop {
+            ui.draw_game(&game, "", &message, "R: play again | S: stats | Q: quit")?;
+            match ui.read_action()? {
+                Action::Letter('r') | Action::Enter => break,
+                Action::Letter('s') => {
+                    ui.show_stats(stats_manager.get_stats(), config.max_guesses)?
+                }
+                Action::Letter('q') | Action::Quit => return Ok(()),
+                _ => {}
+            }
+        }
+    }
 }

@@ -1,7 +1,7 @@
 use rand::{prelude::ThreadRng, Rng};
 use std::sync::OnceLock;
 
-static WORD_LIST_RAW: &'static str = include_str!("word-list.txt");
+static WORD_LIST_RAW: &str = include_str!("word-list.txt");
 static WORD_LIST: OnceLock<Vec<&'static str>> = OnceLock::new();
 
 fn get_word_list() -> &'static Vec<&'static str> {
@@ -52,13 +52,13 @@ mod tests {
         assert!(word_isvalid("aback"));
 
         // Test invalid words
-        assert!(!word_isvalid("xyz"));    // not in dictionary
-        assert!(!word_isvalid("abac"));   // too short
+        assert!(!word_isvalid("xyz")); // not in dictionary
+        assert!(!word_isvalid("abac")); // too short
         assert!(!word_isvalid("abacis")); // too long
-        assert!(!word_isvalid("ABACI"));  // wrong case
+        assert!(!word_isvalid("ABACI")); // wrong case
 
         // Test partial matches (should not work)
-        assert!(!word_isvalid("abac"));   // partial match of "abaci"
+        assert!(!word_isvalid("abac")); // partial match of "abaci"
     }
 
     #[test]

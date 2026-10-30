@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Serialize, Deserialize, Default, Clone)]
 pub struct GameStats {
@@ -29,7 +29,8 @@ impl GameStats {
         if self.games_won == 0 {
             0.0
         } else {
-            let total_guesses: u32 = self.guess_distribution
+            let total_guesses: u32 = self
+                .guess_distribution
                 .iter()
                 .map(|(guesses, count)| guesses * count)
                 .sum();
@@ -60,34 +61,83 @@ impl GameStats {
     }
 }
 
+#[derive(Default)]
 pub struct StatsManager {
     stats: GameStats,
-    file_path: PathBuf,
+    file_path: Option<PathBuf>, // None = in-memory only (no writable data dir)
 }
 
 impl StatsManager {
-    pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
-        let mut path = dirs::home_dir().ok_or("Could not find home directory")?;
-        path.push(".cwordle_stats.json");
+    /// Loads stats from the platform data directory:
+    /// - Linux: $XDG_DATA_HOME/letterlock/stats.json (~/.local/share/...)
+    /// - macOS: ~/Library/Application Support/letterlock/stats.json
+    /// - Windows: %APPDATA%\letterlock\stats.json
+    ///
+    /// Never fails: if no data directory is available, stats are kept in memory.
+    pub fn new() -> Self {
+        match Self::default_path() {
+            Some(path) => {
+                Self::migrate_legacy_file(&path);
+                Self::with_path(path)
+            }
+            None => Self {
+                stats: GameStats::default(),
+                file_path: None,
+            },
+        }
+    }
 
-        let stats = if path.exists() {
-            let content = fs::read_to_string(&path)?;
-            serde_json::from_str(&content).unwrap_or_default()
-        } else {
-            GameStats::default()
+    pub fn with_path(path: PathBuf) -> Self {
+        let stats = match fs::read_to_string(&path) {
+            Ok(content) => serde_json::from_str(&content).unwrap_or_else(|_| {
+                // Keep the unreadable file around rather than silently overwriting it
+                let _ = fs::rename(&path, path.with_extension("json.bak"));
+                GameStats::default()
+            }),
+            Err(_) => GameStats::default(),
         };
 
-        Ok(Self {
+        Self {
             stats,
-            file_path: path,
-        })
+            file_path: Some(path),
+        }
+    }
+
+    pub fn default_path() -> Option<PathBuf> {
+        let mut path = dirs::data_dir()?;
+        path.push(env!("CARGO_PKG_NAME"));
+        path.push("stats.json");
+        Some(path)
+    }
+
+    /// Versions before 0.2 stored stats in ~/.cwordle_stats.json
+    fn migrate_legacy_file(path: &Path) {
+        let Some(legacy) = dirs::home_dir().map(|h| h.join(".cwordle_stats.json")) else {
+            return;
+        };
+        if legacy.exists() && !path.exists() {
+            if let Some(parent) = path.parent() {
+                let _ = fs::create_dir_all(parent);
+            }
+            if fs::copy(&legacy, path).is_ok() {
+                let _ = fs::remove_file(&legacy);
+            }
+        }
+    }
+
+    pub fn file_path(&self) -> Option<&Path> {
+        self.file_path.as_deref()
     }
 
     pub fn get_stats(&self) -> &GameStats {
         &self.stats
     }
 
-    pub fn record_game(&mut self, won: bool, guess_count: Option<usize>) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn record_game(
+        &mut self,
+        won: bool,
+        guess_count: Option<usize>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         self.stats.record_game(won, guess_count);
         self.save()
     }
@@ -98,8 +148,17 @@ impl StatsManager {
     }
 
     fn save(&self) -> Result<(), Box<dyn std::error::Error>> {
+        let Some(path) = &self.file_path else {
+            return Ok(());
+        };
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        // Write to a temp file then rename, so a crash can't leave a half-written file
         let content = serde_json::to_string_pretty(&self.stats)?;
-        fs::write(&self.file_path, content)?;
+        let tmp = path.with_extension("json.tmp");
+        fs::write(&tmp, content)?;
+        fs::rename(&tmp, path)?;
         Ok(())
     }
 }
@@ -280,5 +339,43 @@ mod tests {
         assert_eq!(stats.guess_distribution.get(&4), Some(&2));
         assert_eq!(stats.guess_distribution.get(&5), Some(&1));
         assert_eq!(stats.guess_distribution.get(&6), Some(&1));
+    }
+
+    fn temp_stats_path(name: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("letterlock-test-{}-{}", name, std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        dir.join("nested").join("stats.json")
+    }
+
+    #[test]
+    fn test_stats_manager_persists() {
+        let path = temp_stats_path("persist");
+
+        let mut manager = StatsManager::with_path(path.clone());
+        manager.record_game(true, Some(3)).unwrap();
+        manager.record_game(false, None).unwrap();
+
+        let reloaded = StatsManager::with_path(path.clone());
+        assert_eq!(reloaded.get_stats().games_played, 2);
+        assert_eq!(reloaded.get_stats().games_won, 1);
+
+        let _ = fs::remove_dir_all(path.parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn test_stats_manager_backs_up_corrupt_file() {
+        let path = temp_stats_path("corrupt");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, "not json").unwrap();
+
+        let manager = StatsManager::with_path(path.clone());
+        assert_eq!(manager.get_stats().games_played, 0);
+        assert_eq!(
+            fs::read_to_string(path.with_extension("json.bak")).unwrap(),
+            "not json"
+        );
+
+        let _ = fs::remove_dir_all(path.parent().unwrap().parent().unwrap());
     }
 }

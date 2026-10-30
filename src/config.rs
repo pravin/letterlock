@@ -23,7 +23,7 @@ pub struct Config {
     #[arg(long, value_name = "WORD")]
     pub word: Option<String>,
 
-    /// Disable colors (for accessibility)
+    /// Disable colors (for accessibility). Also honours the NO_COLOR environment variable
     #[arg(long)]
     pub no_color: bool,
 }
@@ -33,13 +33,18 @@ impl Config {
         Config::parse()
     }
 
+    /// Whether to draw with colors: off with --no-color or a non-empty NO_COLOR (https://no-color.org)
+    pub fn use_color(&self) -> bool {
+        !self.no_color && std::env::var_os("NO_COLOR").map_or(true, |v| v.is_empty())
+    }
+
     pub fn validate(&self) -> Result<(), String> {
         if self.max_guesses == 0 || self.max_guesses > 10 {
             return Err("Max guesses must be between 1 and 10".to_string());
         }
 
         if let Some(ref word) = self.word {
-            if word.len() != 5 {
+            if word.len() != WORD_LENGTH {
                 return Err("Custom word must be exactly 5 letters".to_string());
             }
             if !word.chars().all(|c| c.is_ascii_lowercase()) {
@@ -91,7 +96,9 @@ mod tests {
 
         let result = config.validate();
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("Max guesses must be between 1 and 10"));
+        assert!(result
+            .unwrap_err()
+            .contains("Max guesses must be between 1 and 10"));
     }
 
     #[test]
@@ -101,7 +108,9 @@ mod tests {
 
         let result = config.validate();
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("Max guesses must be between 1 and 10"));
+        assert!(result
+            .unwrap_err()
+            .contains("Max guesses must be between 1 and 10"));
     }
 
     #[test]

@@ -2,6 +2,7 @@
 
 pub mod config;
 pub mod gamestate;
+pub mod gameui;
 pub mod stats;
 pub mod words;
 

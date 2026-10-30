@@ -1,7 +1,7 @@
-// Integration tests for cwordle
+// Integration tests for letterlock
 // These tests verify the interaction between different modules
 
-use cwordle::*;
+use letterlock::*;
 
 mod game_flow_tests {
     use super::*;
@@ -25,16 +25,16 @@ mod game_flow_tests {
         assert_eq!(game.status(), gamestate::GameStatus::PLAYING);
 
         // Make incorrect guesses
-        game.new_guess(&"tests".to_string()).unwrap();
+        game.new_guess("tests").unwrap();
         assert_eq!(game.status(), gamestate::GameStatus::PLAYING);
         assert_eq!(game.guess_count(), 1);
 
-        game.new_guess(&"bread".to_string()).unwrap();
+        game.new_guess("bread").unwrap();
         assert_eq!(game.status(), gamestate::GameStatus::PLAYING);
         assert_eq!(game.guess_count(), 2);
 
         // Make winning guess
-        game.new_guess(&"apple".to_string()).unwrap();
+        game.new_guess("apple").unwrap();
         assert_eq!(game.status(), gamestate::GameStatus::WON);
         assert_eq!(game.guess_count(), 3);
     }
@@ -53,9 +53,9 @@ mod game_flow_tests {
         let mut game = gamestate::GameData::new(&config);
 
         // Use all guesses without winning
-        game.new_guess(&"tests".to_string()).unwrap();
-        game.new_guess(&"bread".to_string()).unwrap();
-        game.new_guess(&"lemon".to_string()).unwrap();
+        game.new_guess("tests").unwrap();
+        game.new_guess("bread").unwrap();
+        game.new_guess("lemon").unwrap();
 
         assert_eq!(game.status(), gamestate::GameStatus::LOST);
         assert_eq!(game.guess_count(), 3);
@@ -75,17 +75,17 @@ mod game_flow_tests {
         let mut game = gamestate::GameData::new(&config);
 
         // First guess reveals 'a', 'l', 'e'
-        game.new_guess(&"ankle".to_string()).unwrap();
+        game.new_guess("ankle").unwrap();
         assert!(game.revealed_letters().contains(&'a'));
         assert!(game.revealed_letters().contains(&'l'));
         assert!(game.revealed_letters().contains(&'e'));
 
         // Second guess must use revealed letters
-        let result = game.new_guess(&"birds".to_string());
+        let result = game.new_guess("birds");
         assert!(result.is_err()); // Doesn't contain 'a', 'l', or 'e'
 
-        // Valid guess in hard mode
-        let result = game.new_guess(&"table".to_string());
+        // Valid guess in hard mode: greens 'a', 'l', 'e' stay in place
+        let result = game.new_guess("addle");
         assert!(result.is_ok());
     }
 }
@@ -128,7 +128,11 @@ mod word_validation_tests {
         // Test invalid words
         let invalid_words = ["xyz", "zzzzz", "test", "testing", "APPLE"];
         for word in &invalid_words {
-            assert!(!words::word_isvalid(word), "Word '{}' should be invalid", word);
+            assert!(
+                !words::word_isvalid(word),
+                "Word '{}' should be invalid",
+                word
+            );
         }
     }
 }
@@ -233,7 +237,7 @@ mod keyboard_helper_tests {
         let mut game = gamestate::GameData::new(&config);
 
         // First guess: "plumb" - 'p' and 'l' are in "apple" but wrong positions
-        game.new_guess(&"plumb".to_string()).unwrap();
+        game.new_guess("plumb").unwrap();
 
         let keyboard = game.keyboard_helper();
         let p_index = 'p' as usize - config::ASCII_LOWERCASE_A;
@@ -268,11 +272,11 @@ mod edge_case_tests {
         let mut game = gamestate::GameData::new(&config);
 
         // Use first two guesses
-        game.new_guess(&"tests".to_string()).unwrap();
-        game.new_guess(&"bread".to_string()).unwrap();
+        game.new_guess("tests").unwrap();
+        game.new_guess("bread").unwrap();
 
         // Win on last guess
-        game.new_guess(&"apple".to_string()).unwrap();
+        game.new_guess("apple").unwrap();
 
         assert_eq!(game.status(), gamestate::GameStatus::WON);
         assert_eq!(game.guess_count(), 3);
@@ -292,7 +296,7 @@ mod edge_case_tests {
         let mut game = gamestate::GameData::new(&config);
 
         // Test guess with repeated letters
-        game.new_guess(&"eerie".to_string()).unwrap();
+        game.new_guess("eerie").unwrap();
 
         let keyboard = game.keyboard_helper();
         let e_index = 'e' as usize - config::ASCII_LOWERCASE_A;
@@ -318,7 +322,7 @@ mod edge_case_tests {
         let mut game = gamestate::GameData::new(&config);
 
         // Win on first guess
-        game.new_guess(&"tests".to_string()).unwrap();
+        game.new_guess("tests").unwrap();
 
         assert_eq!(game.status(), gamestate::GameStatus::WON);
         assert_eq!(game.guess_count(), 1);

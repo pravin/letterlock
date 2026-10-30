@@ -61,7 +61,9 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}
-          path: letterlock-*
+          path: |
+            letterlock-*.tar.gz*
+            letterlock-*.zip*
 
   release:
     needs: build
@@ -76,4 +78,4 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
-            --title "$GITHUB_REF_NAME" --generate-notes letterlock-*
+            --title "$GITHUB_REF_NAME" --generate-notes letterlock-*.tar.gz* letterlock-*.zip*

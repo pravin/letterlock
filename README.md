@@ -1,5 +1,10 @@
 # letterlock
 
+[![crates.io](https://img.shields.io/crates/v/letterlock.svg)](https://crates.io/crates/letterlock)
+[![CI](https://github.com/pravin/letterlock/actions/workflows/ci.yml/badge.svg)](https://github.com/pravin/letterlock/actions/workflows/ci.yml)
+[![Latest release](https://img.shields.io/github/v/release/pravin/letterlock)](https://github.com/pravin/letterlock/releases/latest)
+[![License: GPL v3+](https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg)](LICENSE)
+
 _Formerly `cwordle`._
 
 **Crack the five-letter code in six guesses, right in your terminal.**
@@ -94,6 +99,9 @@ must appear in every later guess.
 **No colour:** run with `--no-color` or set `NO_COLOR=1`. Tiles are then marked `[X]` (right
 spot), `(X)` (wrong spot) and lowercase `x` (not in the word).
 
+**Words:** the answer is always a common English word (about 1,700 of them), so you won't be
+asked to find something obscure. Around 4,600 words are accepted as guesses.
+
 Statistics are saved to:
 
 - Linux: `~/.local/share/letterlock/stats.json` (respects `$XDG_DATA_HOME`)
@@ -122,12 +130,31 @@ cargo run -- --word crane   # play with a fixed answer
 
 CI runs formatting, lint and tests on Linux, macOS and Windows for every push and pull request.
 
+### Word lists
+
+- `src/word-list.txt`: every word accepted as a guess
+- `src/answers.txt`: the words an answer can be picked from
+
+`answers.txt` is generated from `word-list.txt` by keeping common words (by frequency in the
+[`wordfreq`](https://pypi.org/project/wordfreq/) package), leaving out plurals, past tenses and a
+curated exclusion list. After editing either file, regenerate it:
+
+```sh
+pip install wordfreq
+python src/scripts/build-answers.py
+```
+
 ### Releasing
 
-1. Bump `version` in `Cargo.toml` and commit.
-2. Tag and push: `git tag v0.2.0 && git push origin v0.2.0`.
+1. Bump `version` in `Cargo.toml`, run `cargo build` to update `Cargo.lock`, and commit.
+2. Tag and push, e.g. `git tag v0.3.0 && git push origin v0.3.0`.
 3. The [Release workflow](.github/workflows/release.yml) builds all six binaries and publishes a
    GitHub release with checksums.
+4. Publish to crates.io: `cargo publish`.
+5. Update the package managers with the new version and the SHA-256 values from the release's
+   `.sha256` files:
+   - Homebrew: `Formula/letterlock.rb` in [pravin/homebrew-tap](https://github.com/pravin/homebrew-tap)
+   - Scoop: `bucket/letterlock.json` in [pravin/scoop-bucket](https://github.com/pravin/scoop-bucket)
 
 To test the builds without publishing, run the Release workflow manually from the Actions tab.
 The binaries appear as downloadable artifacts on the run.

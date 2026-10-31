@@ -13,7 +13,7 @@ letterlock is a free, open-source word-guessing game. After each guess the tiles
 letters are in the right spot, which are in the word but somewhere else, and which aren't in
 the word at all. One small binary, no account, no ads, works offline.
 
-![letterlock mid-game](img/playing.png)
+![Solving a letterlock puzzle in four guesses](img/demo.gif)
 
 Like word ladders? Try the sister game [letterlift](https://github.com/pravin/letterlift).
 
@@ -120,8 +120,8 @@ Statistics are saved to:
 | Out of guesses | Statistics |
 | ![Hard mode rejecting a guess](img/hard-mode.png) | ![No-colour mode](img/no-color.png) |
 | Hard mode rejecting a guess | No-colour mode |
-| ![Word not in the list](img/not-in-list.png) | |
-| Word not in the list | |
+| ![Word not in the list](img/not-in-list.png) | ![Mid-game](img/playing.png) |
+| Word not in the list | Mid-game |
 
 ## Development
 

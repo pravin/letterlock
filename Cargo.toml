@@ -1,6 +1,6 @@
 [package]
 name = "letterlock"
-version = "0.2.0"
+version = "0.3.0"
 authors = ["Pravin Paratey"]
 description = "A free five-letter word-guessing game for the terminal"
 edition = "2021"

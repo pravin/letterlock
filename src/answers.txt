@@ -412,7 +412,6 @@ dogma
 doing
 dolly
 donor
-donut
 doubt
 dough
 dowry
@@ -443,7 +442,6 @@ dummy
 dusty
 dwarf
 dwell
-dying
 eager
 eagle
 early
@@ -514,10 +512,10 @@ feral
 ferry
 fetal
 fetch
-fetus
 fever
 fewer
 fiber
+fibre
 field
 fiend
 fiery
@@ -703,7 +701,6 @@ hoard
 hobby
 hoist
 holly
-homie
 honey
 honor
 horde
@@ -809,6 +806,7 @@ liner
 lingo
 lipid
 liter
+litre
 liver
 lobby
 local
@@ -874,6 +872,7 @@ merry
 messy
 metal
 meter
+metre
 metro
 midst
 might
@@ -901,6 +900,7 @@ motel
 motif
 motor
 motto
+mould
 mound
 mount
 mourn
@@ -949,7 +949,6 @@ nurse
 nutty
 nylon
 oasis
-obese
 occur
 ocean
 oddly
@@ -1019,7 +1018,6 @@ piety
 piggy
 pilot
 pinch
-pinky
 pinto
 pious
 piper
@@ -1245,7 +1243,6 @@ sheen
 sheep
 sheer
 sheet
-sheik
 shelf
 shell
 shift
@@ -1288,7 +1285,6 @@ slang
 slant
 slash
 slate
-slave
 sleek
 sleep
 slept
@@ -1323,7 +1319,6 @@ snoop
 snort
 snout
 snowy
-snuck
 snuff
 sober
 soggy
@@ -1661,10 +1656,8 @@ windy
 wiser
 witch
 witty
-wives
 woken
 woman
-women
 woody
 world
 worry

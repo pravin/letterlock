@@ -62,17 +62,17 @@ mod tests {
     #[test]
     fn test_word_validation() {
         // Test valid words
-        assert!(word_isvalid("abaci"));
+        assert!(word_isvalid("abaft"));
         assert!(word_isvalid("aback"));
 
         // Test invalid words
         assert!(!word_isvalid("xyz")); // not in dictionary
         assert!(!word_isvalid("abac")); // too short
-        assert!(!word_isvalid("abacis")); // too long
+        assert!(!word_isvalid("abafts")); // too long
         assert!(!word_isvalid("ABACI")); // wrong case
 
         // Test partial matches (should not work)
-        assert!(!word_isvalid("abac")); // partial match of "abaci"
+        assert!(!word_isvalid("abaf")); // partial match of "abaft"
     }
 
     #[test]
@@ -99,7 +99,7 @@ mod tests {
 
     #[test]
     fn test_obscure_words_are_guesses_not_answers() {
-        assert!(word_isvalid("abaci"));
-        assert!(get_answer_list().binary_search(&"abaci").is_err());
+        assert!(word_isvalid("abaft"));
+        assert!(get_answer_list().binary_search(&"abaft").is_err());
     }
 }
